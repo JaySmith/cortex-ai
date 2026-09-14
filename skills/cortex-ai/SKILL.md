@@ -6,14 +6,22 @@ description: Work with the Cortex vault — search notes, list by tier/type, add
 # Cortex AI
 
 Persistent, tiered memory for AI agents. Notes live in an Obsidian-style vault
-and are encoded into agent-consumable files. The `cortex` CLI provides search,
-read, and write access.
+and are encoded into agent-consumable files.
+
+**First stop for any Cortex vault operation.** The workflows below carry the
+full guardrails — search-before-write, capture-then-rebuild sync order, drain
+logic, tier guidance — that bare `cortex` CLI calls give up in exchange for
+flexibility. Fall back to the CLI only when no workflow here covers the
+operation (see Skill → CLI fallback below), and never reach for direct file
+edits without Jay's approval — surface the gap instead.
+
+Under the hood these workflows drive the `cortex` CLI:
+
+**Read:** `cortex memory search` · `cortex memory get` · `cortex memory related` · `cortex memory think`
+**Write:** `cortex memory write` — creates/updates a note and auto-triggers encoding
 
 > **Paths.** Resolve vault paths at runtime: `cortex encode --show-config`
 > (returns JSON with `vault_path`, `config_file`, `memory_json`, etc.).
-
-**CLI commands (read):** `cortex memory search`, `cortex memory get`, `cortex memory related`, `cortex memory think`
-**CLI commands (write):** `cortex memory write` — creates/updates a note and auto-triggers encoding
 
 ---
 
@@ -132,8 +140,28 @@ content (>5 meaningful turns), optionally run the `auto-learn` skill's observe
 → propose cycle. The human decides what gets captured. Do not auto-write.
 
 > **For full details** on sync drain guardrails, protected notes, and all advanced
-> commands (version, status, uninstall, list, import, purge, portfolio, open, hive),
-> read `reference.md` in this skill directory.
+> commands (version, status, uninstall, memory list, import, purge, portfolio,
+> open, hive), read `reference.md` in this skill directory. Some land outside
+> this skill's workflows — see Skill → CLI fallback below.
+
+---
+
+## Skill → CLI fallback
+
+No workflow in this skill covers these — call the `cortex` CLI directly, do not
+try to shoehorn them through the skill:
+
+- `cortex encode` / `cortex encode --purge-apply` — rebuild / purge-apply the
+  encoded output (the sync workflow runs these internally but only as a whole)
+- `cortex status` / `cortex version` / `cortex encode --show-config` — health
+  and diagnostics, no skill workflow
+- `cortex memory compact` — dedupe pass
+- `cortex memory list` — raw tier/type listing for bulk inspection
+- `cortex import` — agent import
+
+Anything the CLI has no command for (bulk edits, retiers, frontmatter repair)
+means direct file edits — those require Jay's approval first. Surface the gap;
+do not patch around it silently.
 
 ---
 
