@@ -137,9 +137,11 @@ the CLI or a rebuild — the same vault, two different answers, no error either
 time. Types outside `include_types` are dropped silently, so the failure shows
 up as "my note disappeared", not as a config complaint.
 
-The default covers `knowledge`, `entity`, `decision`, and `feedback`. `meta` is
-intentionally absent (it is the vault index file, not a note). Notes of type
-`risk` exist in some vaults and are likewise excluded by default.
+The default covers `knowledge`, `entity`, `decision`, `feedback`, and `risk`.
+`meta` is intentionally absent (it is the vault index file, not a note). A note
+holding a live compliance or security finding is `type: risk`, `tier: project` —
+excluded by default it was searchable only until the next rebuild, which is how a
+Minstrel PII attestation gap sat unsearchable.
 
 ## Encode Guards
 

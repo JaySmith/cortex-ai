@@ -455,6 +455,7 @@ def install(
             f"      - entity\n"
             f"      - decision\n"
             f"      - feedback\n"
+            f"      - risk\n"
             f"\n"
             f"strip_wiki_links: true\n"
         )
@@ -1484,6 +1485,19 @@ def write(
             )
             raise typer.Exit(code=1)
         # Update mode: patch body and bump date, preserving the note's location.
+        # An --update carrying no body would rebuild the file around an empty
+        # body, silently truncating whatever the note already said. The create
+        # path has always refused to clobber; this path had no equivalent guard,
+        # and it is how six notes in the live vault lost their bodies.
+        if body is None and body_file is None:
+            _error(
+                "Refusing to update without a body",
+                f"--update with no --body/--body-file rewrites {note_path} with an "
+                "empty body, deleting its current content.",
+                "Pass --body/--body-file to set the new content, or drop --update "
+                "to change only the title/frontmatter.",
+            )
+            raise typer.Exit(code=1)
         body_text = _read_body(body, body_file)
         new_content = _build_note_content(
             note_id, note_type, tier, title, today, category, tag_list, body_text

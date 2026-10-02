@@ -185,6 +185,105 @@ class TestMemoryWrite:
         content = note_path.read_text(encoding="utf-8")
         assert "This is the body content." in content
 
+    def test_update_without_body_refuses_and_preserves_content(self, vault):
+        """--update with no --body must not truncate the note.
+
+        Regression: the update path rebuilt the file around an empty body with
+        no guard, so `memory write --update --title X` silently deleted
+        everything the note said. Six notes in the live vault lost their bodies
+        this way (recoverable only from a 2026-08-25 backup).
+        """
+        original = "PRECIOUS CONTENT THAT MUST SURVIVE THE UPDATE"
+        runner.invoke(
+            app,
+            [
+                "memory", "write",
+                "--title", "Clobber Probe",
+                "--type", "knowledge",
+                "--tier", "core",
+                "--body", original,
+                "--vault", str(vault),
+            ],
+            catch_exceptions=False,
+        )
+        note_path = vault / "knowledge" / "clobber-probe.md"
+        assert original in note_path.read_text(encoding="utf-8")
+
+        result = runner.invoke(
+            app,
+            [
+                "memory", "write",
+                "--title", "Clobber Probe",
+                "--type", "knowledge",
+                "--tier", "core",
+                "--update",
+                "--vault", str(vault),
+            ],
+        )
+        assert result.exit_code == 1
+        assert "Refusing to update without a body" in result.stderr
+        # The whole point: content intact, file untouched.
+        assert original in note_path.read_text(encoding="utf-8")
+
+    def test_update_with_body_still_works(self, vault):
+        """The guard must not block a legitimate body-carrying update."""
+        runner.invoke(
+            app,
+            [
+                "memory", "write",
+                "--title", "Legit Update",
+                "--type", "knowledge",
+                "--tier", "core",
+                "--body", "first version",
+                "--vault", str(vault),
+            ],
+            catch_exceptions=False,
+        )
+        result = runner.invoke(
+            app,
+            [
+                "memory", "write",
+                "--title", "Legit Update",
+                "--type", "knowledge",
+                "--tier", "core",
+                "--update",
+                "--body", "second version",
+                "--vault", str(vault),
+            ],
+        )
+        assert result.exit_code == 0
+        content = (vault / "knowledge" / "legit-update.md").read_text(encoding="utf-8")
+        assert "second version" in content
+        assert "first version" not in content
+
+    def test_update_with_empty_body_is_explicit(self, vault):
+        """--body '' is a deliberate truncation, not an omission, so it is allowed."""
+        runner.invoke(
+            app,
+            [
+                "memory", "write",
+                "--title", "Deliberate Empty",
+                "--type", "knowledge",
+                "--tier", "core",
+                "--body", "content to remove",
+                "--vault", str(vault),
+            ],
+            catch_exceptions=False,
+        )
+        result = runner.invoke(
+            app,
+            [
+                "memory", "write",
+                "--title", "Deliberate Empty",
+                "--type", "knowledge",
+                "--tier", "core",
+                "--update",
+                "--body", "",
+                "--vault", str(vault),
+            ],
+        )
+        assert result.exit_code == 0
+
     def test_write_with_body_file(self, vault, tmp_path):
         """Reads body from a file."""
         body_file = tmp_path / "body.md"
