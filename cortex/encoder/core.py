@@ -637,9 +637,16 @@ def sync_python_agents(
     for edge in graph["edges"]:
         adjacency.setdefault(edge["source"], []).append(edge["target"])
         adjacency.setdefault(edge["target"], []).append(edge["source"])
+    # One clock read feeds both freshness fields: a full encode is
+    # simultaneously the last write and the last reconcile, so the two
+    # never diverge here. They only diverge via the CLI's inline
+    # write/delete paths, which move `generated` and leave
+    # `last_full_encode` alone.
+    _now = datetime.now().isoformat()
     result = {
         "_meta": {
-            "generated": datetime.now().isoformat(),
+            "generated": _now,
+            "last_full_encode": _now,
             "source": "Cortex vault",
             "cortex_version": cortex_version(),
             "schema_version": schema_version(),

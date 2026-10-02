@@ -406,6 +406,100 @@ class TestMemoryWrite:
 
 
 # ---------------------------------------------------------------------------
+# _meta freshness stamping
+# ---------------------------------------------------------------------------
+
+
+class TestMemoryMetaFreshness:
+    """`_meta.generated` must move on every write, not just full encodes.
+
+    Regression: the inline write/delete paths patched only `_meta.count`, so
+    `generated` kept reporting the last full encode. The index then read stale
+    while actually being current — the failure direction that trains you to
+    ignore the freshness signal.
+    """
+
+    def _meta(self, vault):
+        path = vault / "_sync" / "encoded" / "memory.json"
+        return json.loads(path.read_text(encoding="utf-8"))["_meta"]
+
+    def _write(self, vault, title):
+        return runner.invoke(
+            app,
+            [
+                "memory",
+                "write",
+                "--title",
+                title,
+                "--type",
+                "knowledge",
+                "--tier",
+                "project",
+                "--vault",
+                str(vault),
+            ],
+        )
+
+    def test_inline_write_advances_generated(self, vault):
+        """A CLI write moves `generated` forward off the encoded value."""
+        _write_memory_json(vault, {})
+        before = self._meta(vault)["generated"]
+        assert before == "2026-01-01T00:00:00"
+
+        assert self._write(vault, "Freshness Probe").exit_code == 0
+        assert self._meta(vault)["generated"] != before
+
+    def test_inline_write_preserves_last_full_encode(self, vault):
+        """`last_full_encode` tracks rebuilds only, so a write must not move it."""
+        path = _write_memory_json(vault, {})
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["_meta"]["last_full_encode"] = "2026-01-01T00:00:00"
+        path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+        assert self._write(vault, "Reconcile Probe").exit_code == 0
+        meta = self._meta(vault)
+        assert meta["last_full_encode"] == "2026-01-01T00:00:00"
+        assert meta["generated"] > meta["last_full_encode"]
+
+    def test_backfill_from_legacy_generated(self, vault):
+        """A pre-upgrade file has no `last_full_encode`; its `generated` is it.
+
+        Exact rather than heuristic: the inline paths provably never touched
+        `generated` before this change, so the stored value IS the last encode.
+        """
+        _write_memory_json(vault, {})
+        assert "last_full_encode" not in self._meta(vault)
+
+        assert self._write(vault, "Legacy Probe").exit_code == 0
+        meta = self._meta(vault)
+        assert meta["last_full_encode"] == "2026-01-01T00:00:00"
+        assert meta["generated"] != meta["last_full_encode"]
+
+    def test_inline_delete_advances_generated(self, vault):
+        """The delete path had the identical omission, so it is covered too."""
+        note = {
+            "doomed-note": {
+                "id": "doomed-note",
+                "type": "knowledge",
+                "category": "",
+                "tier": "project",
+                "tags": [],
+                "updated": "2026-01-01",
+                "aliases": [],
+                "content": "temporary",
+            }
+        }
+        _write_memory_json(vault, note)
+        _create_note_file(vault, "doomed-note", "knowledge", "temporary")
+
+        result = runner.invoke(
+            app, ["memory", "delete", "doomed-note", "--yes", "--vault", str(vault)]
+        )
+        assert result.exit_code == 0
+        assert self._meta(vault)["generated"] != "2026-01-01T00:00:00"
+
+
+# ---------------------------------------------------------------------------
 # cortex memory search
 # ---------------------------------------------------------------------------
 

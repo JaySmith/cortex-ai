@@ -2349,6 +2349,34 @@ def _build_note_content(
     return "\n".join(parts)
 
 
+def _touch_memory_meta(meta: dict) -> None:
+    """Stamp memory.json freshness metadata after an inline write or delete.
+
+    Two distinct facts, previously conflated in one field:
+
+    ``generated``        when this file was last written, by any path.
+    ``last_full_encode`` when it was last fully rebuilt from the vault.
+
+    The inline paths only ever patched ``_meta.count``, so before this,
+    ``generated`` silently meant "last full encode" — it read stale while the
+    index was in fact current, which is the dangerous direction for a freshness
+    signal: it teaches you to ignore the field.
+
+    Keeping both makes the state legible. Equal values mean the index is fully
+    reconciled with the vault. ``generated`` newer than ``last_full_encode``
+    means inline patches have landed since the last rebuild.
+
+    Backfill is exact, not a guess: a file written before this distinction
+    existed never had ``generated`` touched by the inline paths, so its stored
+    value *is* the last full encode. Files with no prior value at all get "now",
+    which is the least wrong answer available.
+    """
+    previous = meta.get("generated")
+    now = datetime.now().isoformat()
+    meta["generated"] = now
+    meta.setdefault("last_full_encode", previous or now)
+
+
 def _update_memory_json_inline(
     vault_root: Path,
     note_id: str,
@@ -2390,9 +2418,10 @@ def _update_memory_json_inline(
     }
     notes[note_id] = note_entry
 
-    # Update meta count
+    # Update meta count and freshness
     meta = data.setdefault("_meta", {})
     meta["count"] = len(notes)
+    _touch_memory_meta(meta)
 
     # Parse [[wiki-links]] from raw body
     targets = set(extract_wiki_links(body or ""))
@@ -2450,9 +2479,10 @@ def _remove_from_memory_json_inline(vault_root: Path, note_id: str) -> None:
     else:
         del notes[note_id]
 
-    # Update meta count
+    # Update meta count and freshness
     meta = data.setdefault("_meta", {})
     meta["count"] = len(notes)
+    _touch_memory_meta(meta)
 
     graph = data.setdefault("_graph", {})
     adjacency = graph.setdefault("adjacency", {})
