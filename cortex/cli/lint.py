@@ -344,8 +344,8 @@ def _check_empty_body(notes: list[VaultNote], note_filter: str | None) -> list[L
         if not n.body or not n.body.strip():
             results.append(
                 LintResult(
-                    "info", "empty-body", n.name,
-                    "Note body is empty — frontmatter only",
+                    "warning", "empty-body", n.name,
+                    "Note body is empty — frontmatter only. Use `cortex memory write --update --title X --body ''` to set deliberately, or add content.",
                 )
             )
     return results

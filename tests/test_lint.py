@@ -213,8 +213,8 @@ class TestRunLint:
     def test_empty_body(self, lint_vault):
         """Detects notes with no body content."""
         result = run_lint(lint_vault)
-        infos = result["infos"]
-        matching = [r for r in infos if r.rule == "empty-body" and r.note_id == "empty-body-note"]
+        warnings = result["warnings"]
+        matching = [r for r in warnings if r.rule == "empty-body" and r.note_id == "empty-body-note"]
         assert len(matching) == 1
 
     def test_note_filter(self, lint_vault):
@@ -285,7 +285,7 @@ class TestLintCLI:
     def test_lint_note_filter(self, lint_vault):
         """--note filters to a single note."""
         result = runner.invoke(lint_app, ["--vault", str(lint_vault), "--note", "good-note"])
-        # good-note has no body, so it gets an empty-body info item
+        # good-note has no body, so it gets an empty-body warning item
         assert "empty-body" in result.stdout
         # But it should NOT flag other notes like no-type-note
         assert "no-type-note" not in result.stdout
