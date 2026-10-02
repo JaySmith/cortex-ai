@@ -27,3 +27,6 @@ example-vault/_sync/
 graphify-out/.graphify_python
 graphify-out/.graphify_root
 graphify-out/cache/
+
+# uv lockfile: local tool artifact, deps are pinned loosely in pyproject.toml
+uv.lock

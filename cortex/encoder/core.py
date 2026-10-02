@@ -192,6 +192,53 @@ def validate_target_config(name: str, cfg: dict, required_keys: list[str]) -> bo
     return True
 
 
+# Targets whose outputs are derived state belonging to the vault being encoded.
+# The skill-embed target is deliberately absent: it deploys reference.md into a
+# configured agent skills directory, which is outside the vault by design.
+_VAULT_ARTIFACT_TARGETS = ("core_context", "projects", "python-agents")
+_VAULT_ARTIFACT_KEYS = ("output_file", "output_dir")
+
+
+def validate_vault_artifact_paths(vault: Path, targets: dict) -> None:
+    """Refuse to write derived vault artifacts outside the vault being encoded.
+
+    cortex.yaml stores absolute output paths, and `cortex encode --config X`
+    takes the *config* location as input while ignoring it for output. That
+    combination is silent: point a copied vault's config at the encode command
+    and it cheerfully rewrites the original vault's memory.json, because the
+    path in the config still names the original. The vault files survive, but
+    the index is rebuilt from a vault nobody asked about — and it will have
+    dropped any note the copy added.
+
+    Checking up front, before any target writes, means a misconfigured run
+    fails without touching anything. Relative paths resolve against the vault
+    root, so a portable config stays portable.
+    """
+    vault_root = vault.resolve()
+    for name in _VAULT_ARTIFACT_TARGETS:
+        cfg = targets.get(name) or {}
+        if not cfg.get("enabled"):
+            continue
+        for key in _VAULT_ARTIFACT_KEYS:
+            raw = cfg.get(key)
+            if not raw:
+                continue
+            resolved = Path(raw).expanduser()
+            if not resolved.is_absolute():
+                resolved = vault_root / resolved
+            resolved = resolved.resolve()
+            if resolved != vault_root and vault_root not in resolved.parents:
+                sys.exit(
+                    f"ERROR: target '{name}.{key}' points outside the vault being encoded.\n"
+                    f"       configured: {raw}\n"
+                    f"       vault:       {vault_root}\n"
+                    f"\n"
+                    f"  Encoding this vault would overwrite a DIFFERENT vault's files.\n"
+                    f"  Use a path inside {vault_root / '_sync' / 'encoded'}, or a path\n"
+                    f"  relative to the vault root."
+                )
+
+
 # ---------------------------------------------------------------------------
 # Frontmatter parsing
 # ---------------------------------------------------------------------------
@@ -637,14 +684,13 @@ def sync_python_agents(
     for edge in graph["edges"]:
         adjacency.setdefault(edge["source"], []).append(edge["target"])
         adjacency.setdefault(edge["target"], []).append(edge["source"])
-    # One clock read feeds both freshness fields: a full encode is
-    # simultaneously the last write and the last reconcile, so the two
-    # never diverge here. They only diverge via the CLI's inline
-    # write/delete paths, which move `generated` and leave
-    # `last_full_encode` alone.
     _now = datetime.now().isoformat()
     result = {
         "_meta": {
+            # Both stamped on a full rebuild: a full encode is simultaneously the
+            # last write and the last reconcile, so the two never diverge here.
+            # They only diverge via the CLI's inline write/delete paths, which
+            # move `generated` and leave `last_full_encode` alone.
             "generated": _now,
             "last_full_encode": _now,
             "source": "Cortex vault",
@@ -1032,9 +1078,33 @@ def run_encode(
     """Run the encoding. Returns exit code (0 = ok)."""
     cfg = load_config(config_path)
 
+    # `--show-config` stays reachable: it is how you inspect this mismatch.
     if show_config_only:
         show_config(cfg, config_path)
         return 0
+
+    # The vault comes from `vault_path` inside the config, NOT from where the
+    # config file sits. So `cortex encode --config <copy>/_sync/cortex.yaml`
+    # encodes whatever that copy's yaml names — normally the original vault.
+    # The copy's own notes are ignored and the original is silently rebuilt,
+    # which drops any note the rebuild's include_types does not admit.
+    # A config living in a `_sync/` dir implies a vault; if that disagrees with
+    # what the config declares, refuse rather than guess.
+    cfg_file = Path(config_path).expanduser().resolve()
+    if cfg_file.parent.name == "_sync":
+        implied = cfg_file.parent.parent
+        declared = Path(cfg["vault_path"]).expanduser().resolve()
+        if implied != declared:
+            sys.exit(
+                f"ERROR: config location and declared vault disagree.\n"
+                f"  config file:   {cfg_file}\n"
+                f"  implies vault: {implied}\n"
+                f"  vault_path:    {cfg['vault_path']}\n"
+                f"\n"
+                f"  This would encode {declared}, not the vault containing the\n"
+                f"  config. If that is intended, edit vault_path to match, or run\n"
+                f"  'cortex encode' without --config."
+            )
 
     if hive_status_only:
         status = hive_status(cfg)
@@ -1123,6 +1193,10 @@ def run_encode(
     targets: dict = cfg.get("targets", {})
 
     dry = dry_run
+
+    # Before anything is written: a config copied from another vault carries
+    # absolute paths back to that vault, and would silently overwrite it.
+    validate_vault_artifact_paths(vault, targets)
 
     core_out: Path | None = None
     cc = targets.get("core_context", {})

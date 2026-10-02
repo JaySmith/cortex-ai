@@ -116,6 +116,54 @@ the agent but is never encoded back into its context. This gives you:
 `session` and `log` note types default to this tier. Promote a note later by
 changing its `tier` and re-encoding.
 
+## Which Notes Reach the Index
+
+Two independent gates decide whether a vault file appears in `memory.json`:
+
+1. `vault_only_types` (`session`, `log`) — dropped by `excluded()` before the
+   type filter ever runs.
+2. `include_types` — a whitelist. A note whose `type` is absent is not indexed.
+
+**`include_types` must list every type you intend to search.** This is not a
+preference list. The full encode rebuilds the index from exactly this set, while
+the CLI's inline write path does *not* filter by type at all. So a note of an
+unlisted type:
+
+- is searchable immediately after `cortex memory write`
+- vanishes from the index on the next `cortex encode`
+
+That asymmetry means search results depend on whether the last write went through
+the CLI or a rebuild — the same vault, two different answers, no error either
+time. Types outside `include_types` are dropped silently, so the failure shows
+up as "my note disappeared", not as a config complaint.
+
+The default covers `knowledge`, `entity`, `decision`, and `feedback`. `meta` is
+intentionally absent (it is the vault index file, not a note). Notes of type
+`risk` exist in some vaults and are likewise excluded by default.
+
+## Encode Guards
+
+`cortex encode` refuses to run in two situations, because both cause **silent
+writes to the wrong vault**:
+
+**Output paths outside the vault.** `core_context`, `projects`, and
+`python-agents` outputs are derived state belonging to the vault being encoded,
+so their paths must resolve inside it. Relative paths resolve against the vault
+root, which keeps a portable config portable. The `skills` target is exempt — it
+deploys `reference.md` into a configured agent skills directory, which is
+outside the vault by design.
+
+**Config location disagreeing with `vault_path`.** The vault being encoded comes
+from `vault_path` *inside* the config, not from where the config file sits. So
+`cortex encode --config <copy>/_sync/cortex.yaml` encodes whatever that copy's
+YAML names — normally the original vault. The copy's notes are ignored and the
+original is rebuilt, dropping anything the rebuild's filters exclude. If the
+config lives in a `_sync/` directory it implies a vault; when that disagrees
+with the declared `vault_path`, the encode aborts.
+
+`cortex encode --show-config` bypasses both guards — it is how you inspect the
+mismatch — but it also bypasses them, so it is the only diagnostic that will run.
+
 ## Versioning
 
 Cortex tracks two independent numbers:

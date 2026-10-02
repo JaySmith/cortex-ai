@@ -445,8 +445,16 @@ def install(
             f"    type: json\n"
             f'    output_file: "{memory_json}"\n'
             f"    include_types:\n"
+            # Everything that is not vault-only. session/log are already held
+            # back by vault_only_types, so this list must name every remaining
+            # type or the full encode will silently drop those notes from the
+            # index while the inline write path (which does not filter) keeps
+            # them — making search results depend on whether the last write
+            # went through the CLI or a rebuild.
             f"      - knowledge\n"
             f"      - entity\n"
+            f"      - decision\n"
+            f"      - feedback\n"
             f"\n"
             f"strip_wiki_links: true\n"
         )
@@ -2354,21 +2362,19 @@ def _touch_memory_meta(meta: dict) -> None:
 
     Two distinct facts, previously conflated in one field:
 
-    ``generated``        when this file was last written, by any path.
-    ``last_full_encode`` when it was last fully rebuilt from the vault.
+    ``generated``          when this file was last written, by any path.
+    ``last_full_encode``   when it was last fully rebuilt from the vault.
 
     The inline paths only ever patched ``_meta.count``, so before this,
     ``generated`` silently meant "last full encode" — it read stale while the
-    index was in fact current, which is the dangerous direction for a freshness
-    signal: it teaches you to ignore the field.
-
-    Keeping both makes the state legible. Equal values mean the index is fully
-    reconciled with the vault. ``generated`` newer than ``last_full_encode``
-    means inline patches have landed since the last rebuild.
+    index was in fact current, which is the dangerous direction for a
+    freshness signal. Keeping both makes the state legible: equal values mean
+    the index is fully reconciled with the vault, and ``generated`` newer than
+    ``last_full_encode`` means inline patches landed since the last rebuild.
 
     Backfill is exact, not a guess: a file written before this distinction
     existed never had ``generated`` touched by the inline paths, so its stored
-    value *is* the last full encode. Files with no prior value at all get "now",
+    value IS the last full encode. Files with no prior value at all get "now",
     which is the least wrong answer available.
     """
     previous = meta.get("generated")
@@ -2418,7 +2424,7 @@ def _update_memory_json_inline(
     }
     notes[note_id] = note_entry
 
-    # Update meta count and freshness
+    # Update meta count
     meta = data.setdefault("_meta", {})
     meta["count"] = len(notes)
     _touch_memory_meta(meta)
@@ -2479,7 +2485,7 @@ def _remove_from_memory_json_inline(vault_root: Path, note_id: str) -> None:
     else:
         del notes[note_id]
 
-    # Update meta count and freshness
+    # Update meta count
     meta = data.setdefault("_meta", {})
     meta["count"] = len(notes)
     _touch_memory_meta(meta)

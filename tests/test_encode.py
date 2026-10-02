@@ -19,6 +19,7 @@ from cortex.encoder.core import (
     strip_wiki_links,
     sync_skill_embeds,
     validate_target_config,
+    validate_vault_artifact_paths,
     write_file,
 )
 
@@ -300,6 +301,96 @@ class TestValidateTargetConfig:
 
     def test_empty_required(self):
         assert validate_target_config("test", {}, []) is True
+
+
+# ---------------------------------------------------------------------------
+# excluded
+# ---------------------------------------------------------------------------
+
+
+class TestValidateVaultArtifactPaths:
+    """Encoded artifacts must land inside the vault being encoded.
+
+    Regression: `cortex encode --config <copy>/cortex.yaml` ignored the copy for
+    output, because cortex.yaml stores absolute paths. It rewrote the original
+    vault's memory.json — and that rebuild dropped every note whose type was
+    missing from `include_types`, including ones the copy had just added.
+    """
+
+    def _targets(self, vault, **overrides):
+        enc = vault / "_sync" / "encoded"
+        t = {
+            "core_context": {"enabled": True, "output_file": str(enc / "core-context.md")},
+            "projects": {"enabled": True, "output_dir": str(enc / "projects")},
+            "python-agents": {"enabled": True, "output_file": str(enc / "memory.json")},
+        }
+        t.update(overrides)
+        return t
+
+    def test_paths_inside_vault_pass(self, tmp_path):
+        validate_vault_artifact_paths(tmp_path, self._targets(tmp_path))  # must not raise
+
+    def test_absolute_path_to_another_vault_refused(self, tmp_path):
+        vault = tmp_path / "vault"
+        other = tmp_path / "original"
+        (vault / "_sync").mkdir(parents=True)
+        targets = self._targets(
+            vault,
+            **{
+                "python-agents": {
+                    "enabled": True,
+                    "output_file": str(other / "memory.json"),
+                }
+            },
+        )
+        with pytest.raises(SystemExit) as exc:
+            validate_vault_artifact_paths(vault, targets)
+        assert "outside the vault" in str(exc.value)
+        assert str(other) in str(exc.value)
+
+    def test_relative_paths_resolve_against_vault(self, tmp_path):
+        """A portable config must stay portable rather than error out."""
+        targets = self._targets(
+            tmp_path,
+            core_context={"enabled": True, "output_file": "_sync/encoded/core-context.md"},
+        )
+        validate_vault_artifact_paths(tmp_path, targets)  # must not raise
+
+    def test_traversal_out_of_vault_refused(self, tmp_path):
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        targets = self._targets(
+            vault,
+            core_context={"enabled": True, "output_file": "../elsewhere/core-context.md"},
+        )
+        with pytest.raises(SystemExit):
+            validate_vault_artifact_paths(vault, targets)
+
+    def test_disabled_target_not_checked(self, tmp_path):
+        """A disabled target with a stale path is not an error."""
+        targets = self._targets(
+            tmp_path,
+            **{"python-agents": {"enabled": False, "output_file": "/nonexistent/elsewhere.json"}},
+        )
+        validate_vault_artifact_paths(tmp_path, targets)  # must not raise
+
+    def test_skill_embed_outside_vault_allowed(self, tmp_path):
+        """skill-embed deploys into an agent skills dir by design, so it is exempt."""
+        targets = self._targets(
+            tmp_path,
+            **{
+                "skills": {
+                    "enabled": True,
+                    "output_file": "/somewhere/else/.config/opencode/skills",
+                    "skills_dir": "/somewhere/else/.config/opencode/skills",
+                }
+            },
+        )
+        validate_vault_artifact_paths(tmp_path, targets)  # must not raise
+
+    def test_vault_root_itself_allowed(self, tmp_path):
+        targets = self._targets(tmp_path, projects={"enabled": True, "output_dir": str(tmp_path)})
+        validate_vault_artifact_paths(tmp_path, targets)  # must not raise
 
 
 # ---------------------------------------------------------------------------
@@ -657,3 +748,67 @@ class TestSyncSkillEmbeds:
         written = sync_skill_embeds([note], {}, strip_links=True, dry=False)
         assert written == []
         assert "skills_dir" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# config location vs declared vault_path
+# ---------------------------------------------------------------------------
+
+
+class TestConfigVaultAgreement:
+    """`vault_path` in the config, not the config's location, picks the vault.
+
+    Regression: `cortex encode --config <copy>/_sync/cortex.yaml` encoded the
+    vault named inside that yaml — the original — while appearing to operate on
+    the copy. The original was rebuilt from its own notes and lost every note
+    whose type was absent from `include_types`.
+    """
+
+    def _vault(self, root, name, declared):
+        v = root / name
+        (v / "_sync").mkdir(parents=True)
+        (v / "_sync" / "cortex.yaml").write_text(
+            f'schema_version: 2\nvault_path: "{declared}"\n', encoding="utf-8"
+        )
+        return v
+
+    def test_mismatched_config_refused(self, tmp_path):
+        from cortex.encoder.core import run_encode
+
+        original = self._vault(tmp_path, "original", tmp_path / "original")
+        copy = self._vault(tmp_path, "copy", original)  # copy's yaml points at original
+        with pytest.raises(SystemExit) as exc:
+            run_encode(config_path=copy / "_sync" / "cortex.yaml")
+        msg = str(exc.value)
+        assert "disagree" in msg
+        assert str(original) in msg
+
+    def test_matching_config_allowed(self, tmp_path):
+        from cortex.encoder.core import run_encode
+
+        v = self._vault(tmp_path, "solo", tmp_path / "solo")
+        # list_only short-circuits before any write, but still passes the check.
+        assert run_encode(config_path=v / "_sync" / "cortex.yaml", list_only=True) == 0
+
+    def test_show_config_bypasses_check(self, tmp_path):
+        """The diagnostic must stay reachable — it is how you see the mismatch."""
+        from cortex.encoder.core import run_encode
+
+        original = self._vault(tmp_path, "original", tmp_path / "original")
+        copy = self._vault(tmp_path, "copy", original)
+        assert run_encode(config_path=copy / "_sync" / "cortex.yaml", show_config_only=True) == 0
+
+    def test_config_outside_sync_dir_not_checked(self, tmp_path):
+        """A repo-root cortex.yaml declares a vault elsewhere by design.
+
+        Uses list_only (not show_config_only) because show_config_only
+        short-circuits ahead of the guard and would pass vacuously.
+        """
+        from cortex.encoder.core import run_encode
+
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        (tmp_path / "cortex.yaml").write_text(
+            f'schema_version: 2\nvault_path: "{elsewhere}"\n', encoding="utf-8"
+        )
+        assert run_encode(config_path=tmp_path / "cortex.yaml", list_only=True) == 0
